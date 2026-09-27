@@ -67,6 +67,9 @@ npm run dev
 | `COOKIE_SECURE` | HTTPS 生产环境必须为 `true` |
 | `WEB_ORIGIN` | 允许的前端来源，默认 `http://localhost:5173` |
 | `EXPORT_MAX_ROWS` | 单次 JSON 导出的总行数上限 |
+| `LOGIN_MAX_FAILURES` | 登录/验密失败额度，默认 5 次，用尽即临时锁定 |
+| `LOGIN_WINDOW_MINUTES` | 失败计数窗口，默认 15 分钟 |
+| `LOGIN_LOCK_MINUTES` | 触发锁定后的锁定时长，默认 15 分钟 |
 | `VITE_API_BASE_URL` | 前端 API 基础路径，默认 `/api/v1` |
 
 不要把生产 `.env` 提交到 Git，也不要使用示例 `SESSION_SECRET` 部署。
@@ -177,6 +180,7 @@ pg_restore -U app -d paper_book_traces --clean --if-exists paper_book_traces.dum
 - 会话令牌只保存 SHA-256 哈希。
 - Cookie 使用 `HttpOnly` 和 `SameSite=Lax`。
 - 生产环境必须设置 `COOKIE_SECURE=true` 并启用 HTTPS。
+- 登录、修改密码和删除账号共用同一按账号失败额度：计数与锁定保存在 PostgreSQL，多节点部署时所有实例一致；邮箱经 NFC、去空白、小写归一化后作为计数键，格式变体无法绕过额度；达到上限即临时锁定并写入 `auth_audit_events` 审计表。
 - 导出不包含密码哈希、会话令牌或内部认证字段。
 - 用户文本按纯文本渲染，前端不使用 `v-html`。
 

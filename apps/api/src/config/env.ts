@@ -14,7 +14,10 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value === 'true'),
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
-  EXPORT_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(100_000)
+  EXPORT_MAX_ROWS: z.coerce.number().int().min(1).max(1_000_000).default(100_000),
+  LOGIN_MAX_FAILURES: z.coerce.number().int().min(1).max(100).default(5),
+  LOGIN_WINDOW_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(15),
+  LOGIN_LOCK_MINUTES: z.coerce.number().int().min(1).max(7 * 24 * 60).default(15)
 });
 
 const parsed = envSchema.safeParse(process.env);

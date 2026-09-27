@@ -49,6 +49,14 @@ enum ActivityAction {
   COMPLETED
 }
 
+enum AuthAuditAction {
+  LOGIN_SUCCEEDED
+  LOGIN_FAILED
+  LOGIN_LOCKED
+  PASSWORD_VERIFY_FAILED
+  PASSWORD_CHANGED
+}
+
 model User {
   id           String      @id @default(uuid()) @db.Uuid
   email        String      @unique @db.VarChar(320)
@@ -208,4 +216,30 @@ model ActivityEvent {
   @@index([userId, bookId, occurredAt])
   @@index([userId, entityType, occurredAt])
   @@map("activity_events")
+}
+
+// 登录/验密失败额度与锁定状态。email 为归一化(NFC + trim + 小写)后的账号标识,
+// 所有 API 节点共享同一行,计数通过单条 INSERT ... ON CONFLICT 原子更新。
+model LoginThrottle {
+  email       String    @id @db.VarChar(320)
+  failCount   Int       @default(0) @map("fail_count")
+  windowStart DateTime  @default(now()) @map("window_start") @db.Timestamptz(3)
+  lockedUntil DateTime? @map("locked_until") @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("login_throttles")
+}
+
+// 认证审计事件。只追加、跨节点一致;userId 为弱关联(账号可能不存在或已删除),不设外键。
+model AuthAuditEvent {
+  id        String          @id @default(uuid()) @db.Uuid
+  email     String          @db.VarChar(320)
+  userId    String?         @map("user_id") @db.Uuid
+  action    AuthAuditAction
+  ip        String?         @db.VarChar(45)
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([email, createdAt])
+  @@index([userId, createdAt])
+  @@map("auth_audit_events")
 }

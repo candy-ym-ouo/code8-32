@@ -10,6 +10,12 @@ import {
   requireAuth,
   verifyPassword
 } from '../../lib/auth.js';
+import { normalizeEmail } from '../../lib/email.js';
+import {
+  beginAuthAttempt,
+  recordAuthFailure,
+  recordAuthSuccess
+} from '../../lib/login-throttle.js';
 
 const credentialsSchema = z.object({
   email: z.string().trim().email('请输入有效邮箱').max(320),
@@ -24,10 +30,6 @@ const passwordChangeSchema = z.object({
 const deleteAccountSchema = z.object({
   password: z.string().min(1, '请输入密码')
 });
-
-function normalizeEmail(email: string): string {
-  return email.normalize('NFC').trim().toLowerCase();
-}
 
 function publicUser(user: { id: string; email: string; createdAt: Date }) {
   return { id: user.id, email: user.email, createdAt: user.createdAt };
@@ -65,13 +67,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     '/login',
     {
       config: {
+        // 按 IP 的粗粒度限流只是第一道防线;按账号的失败额度与锁定
+        // 由 login-throttle 在 PostgreSQL 中原子执行,与节点无关。
         rateLimit: {
           max: 10,
-          timeWindow: '15 minutes',
-          keyGenerator: (request) => {
-            const body = request.body as { email?: string } | undefined;
-            return `${request.ip}:${String(body?.email ?? '').toLowerCase()}`;
-          }
+          timeWindow: '15 minutes'
         }
       }
     },
@@ -81,11 +81,19 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         throw new AppError(401, 'INVALID_CREDENTIALS', '邮箱或密码错误');
       }
       const email = normalizeEmail(parsed.data.email);
+      await beginAuthAttempt(email);
       const user = await prisma.user.findUnique({ where: { email } });
       const valid = user ? await verifyPassword(user.passwordHash, parsed.data.password) : false;
       if (!user || !valid || user.status !== 'ACTIVE' || user.deletedAt) {
+        await recordAuthFailure({
+          email,
+          userId: user?.id ?? null,
+          ip: request.ip,
+          action: 'LOGIN_FAILED'
+        });
         throw new AppError(401, 'INVALID_CREDENTIALS', '邮箱或密码错误');
       }
+      await recordAuthSuccess({ email, userId: user.id, ip: request.ip, action: 'LOGIN_SUCCEEDED' });
       await createSession(user.id, reply);
       return { user: publicUser(user) };
     }
@@ -107,12 +115,28 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
     const authUser = currentUser(request);
     const user = await prisma.user.findUniqueOrThrow({ where: { id: authUser.id } });
+    // 持有旧会话也不能无限重试密码:与登录共用同一按账号失败额度
+    await beginAuthAttempt(user.email);
     const valid = await verifyPassword(user.passwordHash, parsed.data.currentPassword);
-    if (!valid) throw new AppError(422, 'INVALID_PASSWORD', '当前密码不正确');
+    if (!valid) {
+      await recordAuthFailure({
+        email: user.email,
+        userId: user.id,
+        ip: request.ip,
+        action: 'PASSWORD_VERIFY_FAILED'
+      });
+      throw new AppError(422, 'INVALID_PASSWORD', '当前密码不正确');
+    }
 
     await prisma.user.update({
       where: { id: authUser.id },
       data: { passwordHash: await hashPassword(parsed.data.newPassword) }
+    });
+    await recordAuthSuccess({
+      email: user.email,
+      userId: user.id,
+      ip: request.ip,
+      action: 'PASSWORD_CHANGED'
     });
     await createSession(authUser.id, reply, true);
     return { ok: true };
@@ -125,7 +149,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
     const authUser = currentUser(request);
     const user = await prisma.user.findUniqueOrThrow({ where: { id: authUser.id } });
+    await beginAuthAttempt(user.email);
     if (!(await verifyPassword(user.passwordHash, parsed.data.password))) {
+      await recordAuthFailure({
+        email: user.email,
+        userId: user.id,
+        ip: request.ip,
+        action: 'PASSWORD_VERIFY_FAILED'
+      });
       throw new AppError(422, 'INVALID_PASSWORD', '密码不正确');
     }
     const now = new Date();
@@ -137,7 +168,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       prisma.user.update({
         where: { id: authUser.id },
         data: { status: 'DELETED', deletedAt: now }
-      })
+      }),
+      prisma.loginThrottle.deleteMany({ where: { email: user.email } })
     ]);
     reply.clearCookie('pbt_session', { path: '/' });
     return reply.status(204).send();
