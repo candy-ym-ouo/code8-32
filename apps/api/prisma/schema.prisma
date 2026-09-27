@@ -49,6 +49,15 @@ enum ActivityAction {
   COMPLETED
 }
 
+enum AuthAuditAction {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGIN_LOCKED
+  PASSWORD_VERIFY_SUCCESS
+  PASSWORD_VERIFY_FAILED
+  PASSWORD_VERIFY_LOCKED
+}
+
 model User {
   id           String      @id @default(uuid()) @db.Uuid
   email        String      @unique @db.VarChar(320)
@@ -80,6 +89,35 @@ model Session {
 
   @@index([userId, expiresAt])
   @@map("sessions")
+}
+
+// 认证失败额度与锁定状态。subjectKey 形如 "login:{规范化邮箱}" 或 "user:{用户id}"，
+// 所有节点共享同一行，配合 SELECT ... FOR UPDATE 保证并发与跨节点一致。
+model AuthThrottle {
+  id            String    @id @default(uuid()) @db.Uuid
+  subjectKey    String    @unique @map("subject_key") @db.VarChar(340)
+  failures      Int       @default(0)
+  windowStartAt DateTime  @map("window_start_at") @db.Timestamptz(3)
+  lockedUntil   DateTime? @map("locked_until") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("auth_throttles")
+}
+
+// 认证审计事件，与锁定状态变更在同一事务提交。
+model AuthAuditEvent {
+  id         String          @id @default(uuid()) @db.Uuid
+  subjectKey String          @map("subject_key") @db.VarChar(340)
+  userId     String?         @map("user_id") @db.Uuid
+  action     AuthAuditAction @map("action")
+  ip         String?         @db.VarChar(45)
+  userAgent  String?         @map("user_agent") @db.VarChar(300)
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([subjectKey, createdAt])
+  @@index([userId, createdAt])
+  @@map("auth_audit_events")
 }
 
 model Book {

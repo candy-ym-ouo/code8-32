@@ -67,6 +67,9 @@ npm run dev
 | `COOKIE_SECURE` | HTTPS 生产环境必须为 `true` |
 | `WEB_ORIGIN` | 允许的前端来源，默认 `http://localhost:5173` |
 | `EXPORT_MAX_ROWS` | 单次 JSON 导出的总行数上限 |
+| `AUTH_FAILURE_MAX` | 登录或密码校验连续失败达到该次数即锁定，默认 5 |
+| `AUTH_FAILURE_WINDOW_MINUTES` | 失败计数窗口，默认 15 分钟 |
+| `AUTH_LOCK_MINUTES` | 触发锁定后的锁定时长，默认 15 分钟 |
 | `VITE_API_BASE_URL` | 前端 API 基础路径，默认 `/api/v1` |
 
 不要把生产 `.env` 提交到 Git，也不要使用示例 `SESSION_SECRET` 部署。
@@ -93,6 +96,8 @@ npm run dev
 - 完成感受使用 `completion_round` 区分多次读完整本书。
 - 书目和痕迹使用 `version` 防止多端写入覆盖。
 - 所有查询强制带 `userId` 条件，越权资源统一返回 404。
+- 登录与已登录会话的密码校验共用数据库中的失败额度：计数、锁定状态与审计事件在
+  同一事务内经行锁更新，所有 API 节点看到同一份状态，并发与跨节点重试都不能绕过。
 
 ## 常用命令
 
